@@ -1,5 +1,5 @@
 ﻿import { useState } from "react";
-import { Download, Zap } from "lucide-react";
+import { Zap } from "lucide-react";
 
 export default function ActionPanel({ onIngestComplete }) {
   const [ingesting, setIngesting] = useState(false);
@@ -27,13 +27,8 @@ export default function ActionPanel({ onIngestComplete }) {
     }
   }
 
-  function handleExport() {
-    window.location.href = "http://localhost:8000/api/export/blocklist";
-    setMessage("Blocklist export started.");
-  }
-
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-sm clip-corner p-5">
+    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-none p-5">
       <h2 className="text-sm uppercase tracking-widest text-slate-400">Actions</h2>
 
       <div className="mt-4 grid gap-3">
@@ -45,15 +40,6 @@ export default function ActionPanel({ onIngestComplete }) {
         >
           <span>{ingesting ? "SCANNING..." : "INGEST"}</span>
           <Zap className={ingesting ? "h-4 w-4 animate-pulse" : "h-4 w-4"} />
-        </button>
-
-        <button
-          type="button"
-          onClick={handleExport}
-          className="flex items-center justify-between border border-white/10 bg-white/5 px-4 py-3 text-xs tracking-[0.2em] text-slate-200 transition hover:border-emerald-400/30 hover:shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-        >
-          <span>EXPORT</span>
-          <Download className="h-4 w-4" />
         </button>
       </div>
 
