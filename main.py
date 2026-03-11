@@ -257,3 +257,4 @@ def delete_indicator(indicator_id: str, collection: Collection = Depends(get_ind
     if result.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return None
+
