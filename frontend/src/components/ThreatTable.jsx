@@ -1,11 +1,25 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Download, ListFilter, ShieldAlert, X, Zap } from "lucide-react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import {
+  AlertCircle,
+  ChevronDown,
+  FileDown,
+  FileText,
+  ListFilter,
+  ShieldAlert,
+  X,
+  Zap,
+} from "lucide-react";
 
 export default function ThreatTable({ refreshToken, onIngestComplete }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const downloadRef = useRef(null);
+  const filterRef = useRef(null);
   const [ingesting, setIngesting] = useState(false);
   const [activeThreat, setActiveThreat] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -16,6 +30,7 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
     reason: "",
   });
   const [reportMessage, setReportMessage] = useState("");
+  const [notification, setNotification] = useState(null);
   const [filters, setFilters] = useState({
     ipTypes: new Set(),
     valueQuery: "",
@@ -69,6 +84,43 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
     };
   }, [activeThreat, reportOpen]);
 
+  useEffect(() => {
+    if (!downloadOpen) {
+      return undefined;
+    }
+    function handleClick(event) {
+      if (downloadRef.current && !downloadRef.current.contains(event.target)) {
+        setDownloadOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [downloadOpen]);
+
+  useEffect(() => {
+    if (!filtersOpen) {
+      return undefined;
+    }
+    function handleClick(event) {
+      if (filterRef.current && !filterRef.current.contains(event.target)) {
+        setFiltersOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [filtersOpen]);
+
+  function triggerNotification(message, type = "success") {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification(null);
+    }, 3000);
+  }
+
   function toggleFilterSet(key, value) {
     setFilters((prev) => {
       const next = new Set(prev[key]);
@@ -102,8 +154,51 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
     }
   }
 
-  function handleExport() {
-    window.location.href = "http://localhost:8000/api/export/blocklist";
+  function handleExportPdf() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    doc.setFont("helvetica", "bold");
+    doc.text("Threat Intelligence Report", 40, 40);
+    const body = rows.map((row) => [
+      row?.type || "",
+      row?.value || "",
+      row?.threat_level || "",
+      row?.reason || "",
+    ]);
+    autoTable(doc, {
+      head: [["Type", "Value", "Level", "Reason"]],
+      body,
+      startY: 60,
+      styles: { fontSize: 9, textColor: [30, 41, 59] },
+      headStyles: { fillColor: [15, 23, 42], textColor: [226, 232, 240] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+    });
+    doc.save("threat_report.pdf");
+  }
+
+  function downloadCsv() {
+    const headers = ["Type", "Value", "Level", "Reason"];
+    const rowsCsv = rows.map((row) => [
+      row?.type || "",
+      row?.value || "",
+      row?.threat_level || "",
+      row?.reason || "",
+    ]);
+    const csvLines = [headers, ...rowsCsv]
+      .map((line) =>
+        line
+          .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+          .join(",")
+      )
+      .join("\n");
+    const blob = new Blob([csvLines], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "threat_report.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
   }
 
   function updateReportField(key, value) {
@@ -119,6 +214,13 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
         body: JSON.stringify(reportForm),
       });
       if (!res.ok) {
+        if (res.status === 400) {
+          triggerNotification(
+            "Redundant Indicator: This IP is already tracked in our intelligence database.",
+            "error"
+          );
+          return;
+        }
         throw new Error("Report failed");
       }
       setReportMessage("Success");
@@ -188,81 +290,132 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
               Filter
             </button>
             {filtersOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-white/5 backdrop-blur-md border border-white/10 rounded-none p-4 z-20">
-                <div className="space-y-4 text-xs text-slate-300">
-                  <div>
-                    <p className="mb-2 uppercase tracking-widest text-slate-400">IP Type</p>
-                    <div className="flex gap-2">
-                      {["IPv4", "IPv6"].map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => toggleFilterSet("ipTypes", value)}
-                          className={`border px-3 py-1 uppercase tracking-widest rounded-none transition ${
-                            filters.ipTypes.has(value)
-                              ? "border-emerald-400/70 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
-                              : "border-white/10 text-slate-300"
-                          }`}
-                        >
-                          {value}
-                        </button>
-                      ))}
+              <>
+                <div className="fixed inset-0 z-40" />
+                <div
+                  className="absolute right-0 mt-2 w-80 bg-white/5 backdrop-blur-md border border-white/20 rounded-none p-4 z-50 shadow-2xl"
+                  ref={filterRef}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs uppercase tracking-widest text-slate-400">Filters</p>
+                    <button
+                      type="button"
+                      onClick={() => setFiltersOpen(false)}
+                      className="text-slate-400 hover:text-slate-200"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-4 text-xs text-slate-300">
+                    <div>
+                      <p className="mb-2 uppercase tracking-widest text-slate-400">IP Type</p>
+                      <div className="flex gap-2">
+                        {"IPv4,IPv6".split(",").map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => toggleFilterSet("ipTypes", value)}
+                            className={`border px-3 py-1 uppercase tracking-widest rounded-none transition ${
+                              filters.ipTypes.has(value)
+                                ? "border-emerald-400/70 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                                : "border-white/10 text-slate-300"
+                            }`}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 uppercase tracking-widest text-slate-400">IP Address / Domain</p>
+                      <input
+                        type="text"
+                        value={filters.valueQuery}
+                        onChange={(event) => updateFilterValue("valueQuery", event.target.value)}
+                        placeholder="Search IP or Domain"
+                        className="w-full bg-black/30 border border-white/10 px-3 py-2 rounded-none text-xs text-slate-200 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <p className="mb-2 uppercase tracking-widest text-slate-400">Reason</p>
+                      <input
+                        type="text"
+                        value={filters.reasonQuery}
+                        onChange={(event) => updateFilterValue("reasonQuery", event.target.value)}
+                        placeholder="Search Reason"
+                        className="w-full bg-black/30 border border-white/10 px-3 py-2 rounded-none text-xs text-slate-200 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <p className="mb-2 uppercase tracking-widest text-slate-400">Level of Threat</p>
+                      <div className="flex gap-2">
+                        {"High,Medium,Low".split(",").map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => toggleFilterSet("threatLevels", value)}
+                            className={`border px-3 py-1 uppercase tracking-widest rounded-none transition ${
+                              filters.threatLevels.has(value)
+                                ? "border-emerald-400/70 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                                : "border-white/10 text-slate-300"
+                            }`}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-
-                  <div>
-                    <p className="mb-2 uppercase tracking-widest text-slate-400">IP Address / Domain</p>
-                    <input
-                      type="text"
-                      value={filters.valueQuery}
-                      onChange={(event) => updateFilterValue("valueQuery", event.target.value)}
-                      placeholder="Partial match"
-                      className="w-full bg-black/30 border border-white/10 px-3 py-2 rounded-none text-xs text-slate-200 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <p className="mb-2 uppercase tracking-widest text-slate-400">Reason</p>
-                    <input
-                      type="text"
-                      value={filters.reasonQuery}
-                      onChange={(event) => updateFilterValue("reasonQuery", event.target.value)}
-                      placeholder="Partial match"
-                      className="w-full bg-black/30 border border-white/10 px-3 py-2 rounded-none text-xs text-slate-200 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <p className="mb-2 uppercase tracking-widest text-slate-400">Level of Threat</p>
-                    <div className="flex gap-2">
-                      {["High", "Medium", "Low"].map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => toggleFilterSet("threatLevels", value)}
-                          className={`border px-3 py-1 uppercase tracking-widest rounded-none transition ${
-                            filters.threatLevels.has(value)
-                              ? "border-emerald-400/70 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
-                              : "border-white/10 text-slate-300"
-                          }`}
-                        >
-                          {value}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFiltersOpen(false)}
+                    className="mt-4 w-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs uppercase tracking-widest text-emerald-200 rounded-none shadow-[0_0_15px_rgba(16,185,129,0.2)] transition"
+                  >
+                    Apply Filters
+                  </button>
                 </div>
+              </>
+            )}
+          </div>
+          <div className="relative" ref={downloadRef}>
+            <button
+              type="button"
+              onClick={() => setDownloadOpen((open) => !open)}
+              className="flex items-center gap-2 border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-slate-200 rounded-none hover:border-emerald-400/60 transition"
+            >
+              Export
+              <ChevronDown className="h-4 w-4 text-emerald-300" />
+            </button>
+            {downloadOpen && (
+              <div className="absolute right-0 mt-2 w-48 bg-white/5 backdrop-blur-md border border-white/10 rounded-none p-2 z-20 text-xs text-slate-300">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleExportPdf();
+                    setDownloadOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2 hover:bg-emerald-500/10 transition flex items-center gap-2"
+                >
+                  <FileText className="h-4 w-4 text-emerald-300" />
+                  PDF (.pdf)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadCsv();
+                    setDownloadOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2 hover:bg-emerald-500/10 transition flex items-center gap-2"
+                >
+                  <FileDown className="h-4 w-4 text-emerald-300" />
+                  Excel (.csv)
+                </button>
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleExport}
-            className="flex items-center gap-2 border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-slate-200 rounded-none hover:border-emerald-400/60 transition"
-          >
-            <Download className="h-4 w-4 text-emerald-300" />
-            Export
-          </button>
         </div>
       </div>
 
@@ -347,6 +500,18 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
         <p className="mt-3 text-xs text-emerald-300">{reportMessage}</p>
       )}
 
+      {notification && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 max-w-xs border px-4 py-3 text-xs uppercase tracking-widest backdrop-blur-sm ${
+            notification.type === "success"
+              ? "border-emerald-500/60 bg-[#0c0c0e] text-emerald-200"
+              : "border-rose-500/60 bg-[#0c0c0e] text-rose-200"
+          }`}
+        >
+          {notification.message}
+        </div>
+      )}
+
       {reportOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4"
@@ -388,7 +553,7 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
                   onChange={(event) => updateReportField("type", event.target.value)}
                   className="mt-2 w-full bg-black/30 border border-white/10 px-3 py-2 rounded-none text-sm text-slate-200 outline-none"
                 >
-                  {["ip", "domain"].map((kind) => (
+                  {"ip,domain".split(",").map((kind) => (
                     <option key={kind} value={kind}>
                       {kind}
                     </option>
@@ -411,7 +576,7 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
 
               <div>
                 <label className="text-xs uppercase tracking-widest text-slate-400">
-                  Suggested Level
+                  Threat Level
                 </label>
                 <select
                   value={reportForm.threat_level}
@@ -428,7 +593,7 @@ export default function ThreatTable({ refreshToken, onIngestComplete }) {
 
               <div>
                 <label className="text-xs uppercase tracking-widest text-slate-400">
-                  Description
+                  Reason
                 </label>
                 <textarea
                   value={reportForm.reason}

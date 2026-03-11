@@ -120,6 +120,7 @@ def _startup() -> None:
     indicators.create_index([("type", ASCENDING), ("value", ASCENDING)], unique=True)
     indicators.create_index([("created_at", DESCENDING)])
     submissions.create_index([("submitted_at", DESCENDING)])
+    submissions.create_index("value", unique=True)
 
     app.state.mongo_client = client
     app.state.indicators = indicators
@@ -239,13 +240,35 @@ def export_blocklist(collection: Collection = Depends(get_indicators_collection)
 @app.post("/api/report")
 def report_indicator(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     submissions: Optional[Collection] = getattr(request.app.state, "submissions", None) if request else None
-    if submissions is None:
+    indicators: Optional[Collection] = getattr(request.app.state, "indicators", None) if request else None
+    if submissions is None or indicators is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Sandbox database not initialized",
         )
 
     doc = dict(payload)
+    if "value" in doc and isinstance(doc["value"], str):
+        doc["value"] = doc["value"].strip()
+    value = doc.get("value")
+    if value:
+        prod_existing = indicators.find_one({"value": value})
+        if prod_existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This indicator is already verified and present in the live threat feed.",
+            )
+        sandbox_existing = submissions.find_one({"value": value})
+        if sandbox_existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This indicator has already been reported and is awaiting verification.",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing indicator value",
+        )
     doc["submitted_at"] = _utcnow()
     doc["status"] = "quarantined"
 
