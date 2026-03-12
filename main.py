@@ -62,7 +62,7 @@ class IndicatorOut(IndicatorIn):
     created_at: datetime
     updated_at: datetime
 
-app = FastAPI(title="Threat Intel API")
+app = FastAPI(title="Threat Intelligence Feed Aggregator API")
 
 # --- Simple in-memory rate limiting for /api/indicators ---
 _rate_lock = Lock()
@@ -173,7 +173,6 @@ def ingest_feed(collection: Collection = Depends(get_indicators_collection)) -> 
             ip_type = "IPv4" if parsed_ip.version == 4 else "IPv6"
             
             # --- DEMO MAGIC: Force a perfect colorful mix for the presentation ---
-            # We randomly generate a hit score from 1 to 10 to guarantee a balanced UI
             mock_hits = random.randint(1, 10)
             risk_score = min(mock_hits * 12, 100)
 
@@ -241,34 +240,39 @@ def export_blocklist(collection: Collection = Depends(get_indicators_collection)
 def report_indicator(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     submissions: Optional[Collection] = getattr(request.app.state, "submissions", None) if request else None
     indicators: Optional[Collection] = getattr(request.app.state, "indicators", None) if request else None
+    
     if submissions is None or indicators is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Sandbox database not initialized",
         )
 
-    doc = dict(payload)
-    if "value" in doc and isinstance(doc["value"], str):
-        doc["value"] = doc["value"].strip()
-    value = doc.get("value")
-    if value:
-        prod_existing = indicators.find_one({"value": value})
-        if prod_existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This indicator is already verified and present in the live threat feed.",
-            )
-        sandbox_existing = submissions.find_one({"value": value})
-        if sandbox_existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This indicator has already been reported and is awaiting verification.",
-            )
-    else:
+    # Clean the input to prevent sneaky whitespace bypasses
+    raw_value = payload.get("value", "")
+    clean_value = str(raw_value).strip()
+
+    if not clean_value:
+        raise HTTPException(status_code=400, detail="Missing indicator value")
+
+    # 1. Bulletproof Production Check (Case-insensitive exact match)
+    prod_existing = indicators.find_one({"value": {"$regex": f"^{clean_value}$", "$options": "i"}})
+    if prod_existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing indicator value",
+            detail="Redundant: This indicator is already verified in the live threat feed.",
         )
+
+    # 2. Bulletproof Sandbox Check
+    sandbox_existing = submissions.find_one({"value": {"$regex": f"^{clean_value}$", "$options": "i"}})
+    if sandbox_existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Duplicate: This indicator has already been reported and is awaiting verification.",
+        )
+
+    # 3. Insert if clean
+    doc = dict(payload)
+    doc["value"] = clean_value
     doc["submitted_at"] = _utcnow()
     doc["status"] = "quarantined"
 
