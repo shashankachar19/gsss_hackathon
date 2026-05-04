@@ -136,4 +136,4 @@ http://localhost:5173
 
 - The Sandbox database stores community reports with a quarantined status.
 - Duplicate checks block indicators already verified in production and prevent repeat reports in the sandbox.
-- Export tools support PDF and CSV for professional reporting.
+- Export tools support PDF and CSV for professional reporting...
